@@ -2,6 +2,8 @@
 
 面向 DJI Dock 3 / Matrice 4D、4TD 的网页航线预规划工具。用户在 Cesium 地图上绘制作业区，页面自动生成垂直摄影航线、拍照位置和区内连接路径。
 
+在线访问：[航域 AeroPlan](https://marky789.github.io/aeroplan-ortho-planner/)。
+
 ## 本地运行
 
 需要 Node.js 22.12+ 或 24+。
@@ -19,7 +21,24 @@ npm run build
 npm run preview
 ```
 
-生产构建输出至 `dist/`，预览地址为 http://127.0.0.1:4173/ 。应部署整个目录，包括 `/cesium` 下的静态资源。浏览器须支持 WebGL。
+生产构建输出至 `dist/`，预览地址为 http://127.0.0.1:4173/ 。应部署整个目录，包括其中 `cesium/` 下的静态资源。浏览器须支持 WebGL。
+
+## GitHub Pages 部署
+
+推送到 `main` 后，`.github/workflows/pages.yml` 自动执行算法测试、构建、部署路径测试并发布。Pages 使用 GitHub Actions 作为发布来源。
+
+- 项目路径由 `VITE_BASE_PATH=/aeroplan-ortho-planner/` 指定；Vite 资源、规划 Worker 和 Cesium 资源统一使用此路径。本地开发默认 `/`。
+- 天地图浏览器密钥配置于仓库 Actions Secret `VITE_TIANDITU_TOKEN`，构建时注入，不提交 `.env.local`。这是浏览器端访问密钥，会出现在公开网页资源和天地图请求中；如密钥设置域名限制，需要允许 `marky789.github.io`。
+- 修改部署路径后，应使用相同环境变量执行构建、测试和预览。例如 PowerShell：
+
+```powershell
+$env:VITE_BASE_PATH = '/aeroplan-ortho-planner/'
+npm run build
+npm run test:deployment
+npm run preview
+```
+
+此时本地预览地址为 http://127.0.0.1:4173/aeroplan-ortho-planner/ 。结束后移除该环境变量即可恢复根路径构建。
 
 ## 操作
 
