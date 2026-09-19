@@ -1,0 +1,23 @@
+{
+  "name": "aeroplan-ortho-planner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "test": "node --test src/planner.test.js"
+  },
+  "dependencies": {
+    "cesium": "1.139.0",
+    "lucide": "^1.47.0",
+    "proj4": "^2.22.0",
+    "vite": "^8.3.0",
+    "vite-plugin-static-copy": "^4.1.1"
+  },
+  "overrides": {
+    "@cesium/engine": "23.0.1",
+    "@cesium/widgets": "14.4.0"
+  }
+}
