@@ -52,7 +52,8 @@ test('rectangle creates a connected survey, full photos and consistent metrics',
   assert.equal(plan.photos.length, plan.stats.photoCount);
   assert.equal(plan.heading, 90);
   assert.ok(Math.abs(plan.stats.distanceM - plan.stats.captureDistanceM - plan.stats.transitDistanceM) < 1e-6);
-  assert.equal(plan.stats.relativeDockHeightM, 60);
+  assert.equal(plan.stats.aglM, 100);
+  assert.equal(plan.terrain.status, 'pending');
   for (const leg of plan.legs) {
     assert.deepEqual(leg.photos[0], leg.start);
     assert.deepEqual(leg.photos.at(-1), leg.end);
@@ -92,15 +93,17 @@ test('self crossing and touching/nested holes are rejected with actionable error
   assert.throws(() => planMission(ll(rectangle), baseOptions, [hole, nested]), /包含/);
 });
 
-test('highest roof drives overlap spacing while ground drives worst GSD', () => {
+test('only AGL drives spacing and legacy building or dock heights have no effect', () => {
   const ground = planMission(ll(rectangle), { ...baseOptions, buildingHeight: 0 });
   const rooftop = planMission(ll(rectangle), { ...baseOptions, buildingHeight: 50 });
-  assert.ok(Math.abs(ground.stats.lineSpacingM / rooftop.stats.lineSpacingM - 2) < 1e-10);
-  assert.ok(Math.abs(ground.stats.shotSpacingM / rooftop.stats.shotSpacingM - 2) < 1e-10);
+  assert.equal(ground.stats.lineSpacingM, rooftop.stats.lineSpacingM);
+  assert.equal(ground.stats.shotSpacingM, rooftop.stats.shotSpacingM);
   assert.equal(ground.stats.gsdCm, rooftop.stats.gsdCm);
-  assert.equal(rooftop.stats.minClearanceM, 50);
-  assert.ok(rooftop.stats.photoCount > ground.stats.photoCount);
-  assert.throws(() => planMission(ll(rectangle), { buildingHeight: 95, altitude: 100, clearance: 20 }), /净空/);
+  assert.equal(rooftop.stats.minClearanceM, undefined);
+  assert.deepEqual(rooftop.path, ground.path);
+  const high=planMission(ll(rectangle), {...baseOptions,altitude:200,buildingHeight:500,dockHeight:500});
+  assert.equal(high.stats.lineSpacingM,2*ground.stats.lineSpacingM);
+  assert.equal(high.stats.gsdCm,2*ground.stats.gsdCm);
 });
 
 test('one narrow area still receives a leg and both endpoint exposures', () => {

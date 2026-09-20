@@ -16,3 +16,4 @@
 @media(max-width:800px){.map-legend{bottom:280px}}
 @media(max-width:600px){.map-legend{bottom:224px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;scroll-behavior:auto!important}}
+.terrain-status{font-size:11px;color:#17634e;line-height:1.7;margin:4px 0 14px}.field-hint{line-height:1.65}#smart-fields{padding:2px 0 4px}.review-subtitle{overflow-wrap:anywhere}

@@ -3,10 +3,12 @@ import {
   Cartesian3, Cartesian2, Math as CMath, Color, PolygonHierarchy,
   CustomDataSource, ScreenSpaceEventHandler, ScreenSpaceEventType, BoundingSphere,
   HeadingPitchRange, PolylineDashMaterialProperty, PointPrimitiveCollection,
-  LabelStyle, VerticalOrigin,
+  LabelStyle, VerticalOrigin, HeightReference, ArcType,
   SceneTransforms,
 } from 'cesium';
 import { CGCS2000_ELLIPSOID, createTiandituLayers } from './tianditu.js';
+import { createOnlineTerrain } from './terrain-source.js';
+import { createLocalProjection } from './planner.js';
 
 const GREEN = Color.fromCssColorString('#35e5b0');
 const WHITE = Color.fromCssColorString('#ffffff');
@@ -39,11 +41,19 @@ export function createMap(container, callbacks) {
   const photoPoints = viewer.scene.primitives.add(new PointPrimitiveCollection());
   let mode = null, draft = [], hover = null, model = null, is3D = false;
   let showPhotos = false, drag = null, frame = null, moving = null;
+  let terrainPromise;
+  function prepareTerrain(){
+    if(!terrainPromise)terrainPromise=createOnlineTerrain({ellipsoid:CGCS2000_ELLIPSOID}).then(terrain=>{
+      viewer.terrainProvider=terrain.provider;callbacks.onTerrainReady?.();request();return terrain;
+    }).catch(error=>{terrainPromise=null;throw error;});
+    return terrainPromise;
+  }
   const handler = new ScreenSpaceEventHandler(viewer.canvas);
   viewer.canvas.addEventListener('contextmenu', event => event.preventDefault());
   function request() { viewer.scene.requestRender(); }
   function pick(position) {
-    const cart = viewer.camera.pickEllipsoid(position, CGCS2000_ELLIPSOID);
+    const ray=viewer.camera.getPickRay(position);
+    const cart = ray && viewer.scene.globe.pick(ray,viewer.scene);
     if (!cart) return null;
     const c = CGCS2000_ELLIPSOID.cartesianToCartographic(cart);
     return [CMath.toDegrees(c.longitude), CMath.toDegrees(c.latitude)];
@@ -52,17 +62,19 @@ export function createMap(container, callbacks) {
     if (points.length < 2) return;
     target.entities.add({ polyline: { positions: points.map(LL), width,
       material: dashed ? new PolylineDashMaterialProperty({ color, dashLength: 12 }) : color,
-      clampToGround: false,
+      clampToGround: points.every(p=>p.length<3), arcType:points.every(p=>p.length<3)?ArcType.GEODESIC:ArcType.NONE,
     } });
   }
   function point(target, p, label, color = GREEN, id) {
     return target.entities.add({ id, position: LL(p), point: {
       pixelSize: label ? 11 : 8, color, outlineColor: WHITE, outlineWidth: 2,
       disableDepthTestDistance: Infinity,
+      heightReference: p.length<3?HeightReference.CLAMP_TO_GROUND:HeightReference.NONE,
     }, ...(label ? { label: { text: label, font: '500 12px sans-serif',
       fillColor: WHITE, outlineColor: Color.fromCssColorString('#172c31'), outlineWidth: 4,
       style: LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cartesian2(0, -20),
       verticalOrigin: VerticalOrigin.BOTTOM, disableDepthTestDistance: Infinity,
+      heightReference:p.length<3?HeightReference.CLAMP_TO_GROUND:HeightReference.NONE,
     } } : {}) });
   }
   function sketch() {
@@ -70,7 +82,7 @@ export function createMap(container, callbacks) {
     const positions = [...draft, ...(hover && draft.length ? [hover] : [])];
     if (positions.length > 2) sketches.entities.add({ polygon: {
       hierarchy: new PolygonHierarchy(positions.map(LL)),
-      material: (mode === 'hole' ? AMBER : GREEN).withAlpha(.13), height: 0,
+      material: (mode === 'hole' ? AMBER : GREEN).withAlpha(.13),
     } });
     polyline(sketches, positions, mode === 'hole' ? AMBER : GREEN, 2);
     draft.forEach((p, i) => point(sketches, p, String(i + 1), mode === 'hole' ? AMBER : GREEN));
@@ -130,36 +142,45 @@ export function createMap(container, callbacks) {
   function draw(nextModel) {
     stopPreview(); model = nextModel;
     areas.entities.removeAll(); routes.entities.removeAll(); photoPoints.removeAll();
-    const { ring = [], holes = [], plan, dock, altitude = 100, dockHeight = 0 } = model;
+    const { ring = [], holes = [], plan, dock } = model;
     if (ring.length >= 3) {
       areas.entities.add({ polygon: {
         hierarchy: new PolygonHierarchy(ring.map(LL), holes.map(h => new PolygonHierarchy(h.map(LL)))),
-        height: 0, material: GREEN.withAlpha(.12),
+        material: GREEN.withAlpha(.12),
       } });
       polyline(areas, [...ring, ring[0]], GREEN, 3);
       ring.forEach((p, i) => point(areas, p, null, GREEN, `vertex-${i}`));
       holes.forEach(h => polyline(areas, [...h, h[0]], AMBER, 2));
     }
-    const z = is3D ? altitude : 2;
     if (plan) {
-      plan.legs.forEach(leg => polyline(routes, [[...leg.start,z], [...leg.end,z]],
+      plan.legs.forEach(leg => polyline(routes, leg.positions || [leg.start, leg.end],
         leg.pass === 2 ? GREEN.withAlpha(.65) : GREEN, 2));
-      plan.connections.forEach(c => polyline(routes, c.positions.map(p => [...p,z]), WHITE.withAlpha(.7), 1.6, true));
-      for (const p of plan.photos) photoPoints.add({ position: LL([...p,z+1]), pixelSize: 3.8,
+      plan.connections.forEach(c => polyline(routes, c.positions, WHITE.withAlpha(.7), 1.6, true));
+      for (const p of plan.photos) photoPoints.add({ position: LL(p), pixelSize: 3.8,
         color: WHITE.withAlpha(.9), disableDepthTestDistance: Infinity });
       photoPoints.show = showPhotos;
       if (plan.path.length) {
-        point(routes, [...plan.path[0],z], '起点', GREEN);
-        point(routes, [...plan.path.at(-1),z], '终点', AMBER);
+        point(routes, plan.path[0], '起点', GREEN);
+        point(routes, plan.path.at(-1), '终点', AMBER);
+      }
+      if(showPhotos&&plan.captureMode==='smartOrtho'&&plan.captureRequests.length){
+        const station=plan.captureRequests[0], f=createLocalProjection([plan.projectionOrigin]), xy=f.forward(station.position.slice(0,2));
+        const a=station.flightHeadingDeg*Math.PI/180,c=Math.cos(a),s=Math.sin(a);
+        for(const [index,view] of plan.captureModel.views.entries()){
+          const coords=view.corners.map(([x,y])=>[...f.inverse([xy[0]+c*x+s*y,xy[1]-s*x+c*y]),station.position[2]-model.altitude]);
+          const tint=[Color.CORNFLOWERBLUE,GREEN,AMBER][index];
+          routes.entities.add({polygon:{hierarchy:new PolygonHierarchy(coords.map(LL)),perPositionHeight:true,material:tint.withAlpha(.18)}});
+          polyline(routes,[...coords,coords[0]],tint,1.5);
+        }
       }
     }
-    if (dock) point(areas, [...dock, is3D ? dockHeight : 2], '机场', Color.fromCssColorString('#5ab9ff'));
+    if (dock) point(areas, dock.slice(0,2), '机场位置', Color.fromCssColorString('#5ab9ff'));
     request();
   }
   function fit(ring = model?.ring, duration = .8) {
     if (!ring?.length) return;
-    const positions = ring.map(LL);
-    if (is3D) positions.push(...ring.map(p=>LL([...p,model?.altitude||100])));
+    const positions = ring.map(p=>LL([...p,model?.plan?.stats?.terrainMaxM||0]));
+    if (model?.plan?.path.length) positions.push(LL(model.plan.path[0]),LL(model.plan.path.at(-1)));
     const sphere = BoundingSphere.fromPoints(positions);
     const range = Math.max(550, sphere.radius * 3.6);
     viewer.camera.flyToBoundingSphere(sphere, { duration,
@@ -201,11 +222,11 @@ export function createMap(container, callbacks) {
     if (frame) { stopPreview(); return; }
     const path = model?.plan?.path;
     if (!path?.length) return;
-    const positions = path.map(p => LL([...p,is3D ? model.altitude : 4]));
+    const positions = path.map(LL);
     const distances = [0];
     for (let i=1;i<positions.length;i++) distances.push(distances.at(-1)+Cartesian3.distance(positions[i-1],positions[i]));
     const total=distances.at(-1), start=performance.now();
-    moving=point(routes,[...path[0],is3D ? model.altitude : 4],'预览',WHITE);
+    moving=point(routes,path[0],'预览',WHITE);
     callbacks.onPreview?.(true);
     function tick(now) {
       const d=(now-start)/16000*total;
@@ -225,9 +246,9 @@ export function createMap(container, callbacks) {
     if (count === 0 && firstLoad) callbacks.onMapLoaded?.();
   });
   return {
-    viewer, draw, fit, setMode, finish, setBasemap, preview,
+    viewer, draw, fit, setMode, finish, setBasemap, preview, prepareTerrain,
     cancel: () => setMode(null), undo: () => { draft.pop();sketch(); },
-    setPhotos: value => {showPhotos=value;photoPoints.show=value;request();},
+    setPhotos: value => {showPhotos=value;if(model)draw(model);request();},
     zoom: factor => {viewer.camera.zoomIn(viewer.camera.positionCartographic.height*factor);request();},
     north: () => viewer.camera.flyTo({destination:viewer.camera.position,orientation:{heading:0,pitch:viewer.camera.pitch,roll:0},duration:.5}),
     toggle3D: () => {is3D=!is3D;viewer.scene.screenSpaceCameraController.enableTilt=is3D;if(model)draw(model);fit();return is3D;},

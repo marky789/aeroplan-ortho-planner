@@ -1,4 +1,5 @@
 import proj4 from 'proj4';
+import { createCaptureModel } from './capture-geometry.js';
 
 // The image footprint is an approximation from the advertised diagonal FOV.
 // A calibrated lens model is needed before executing a production survey.
@@ -10,8 +11,9 @@ export const CAMERA_PROFILES = Object.freeze({
 });
 
 export const DEFAULT_OPTIONS = Object.freeze({
-  camera: '4D', altitude: 100, dockHeight: 40, buildingHeight: 40,
-  clearance: 20, frontOverlap: 85, sideOverlap: 80, speed: 6,
+  camera: '4D', captureMode: 'nadir', altitude: 100,
+  smartPitch: -62.5, smartYaw: 27.5,
+  terrainSampleSpacing: 30, frontOverlap: 85, sideOverlap: 80, speed: 6,
   heading: 0, autoHeading: true, crossGrid: false, turnSeconds: 3,
 });
 
@@ -139,15 +141,19 @@ export function validatePolygon(ringLL, holesLL = []) {
 
 export function validateOptions(options) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('规划参数必须是有效对象。');
-  const settings = { ...DEFAULT_OPTIONS, ...options };
+  // Old drafts may contain building/dock heights. They no longer affect this
+  // terrain-relative model; only supported planning fields are retained.
+  const settings = Object.fromEntries(Object.entries(DEFAULT_OPTIONS).map(([key, value]) => [key, Object.hasOwn(options, key) ? options[key] : value]));
   if (typeof settings.camera !== 'string' || !Object.hasOwn(CAMERA_PROFILES, settings.camera)) throw new Error('请选择有效的相机型号与照片模式。');
   if (typeof settings.autoHeading !== 'boolean' || typeof settings.crossGrid !== 'boolean') throw new Error('自动航向与双网格参数必须为布尔值。');
-  for (const key of ['altitude', 'dockHeight', 'buildingHeight', 'clearance', 'frontOverlap', 'sideOverlap', 'speed', 'heading', 'turnSeconds']) {
+  if (!['nadir', 'smartOrtho'].includes(settings.captureMode)) throw new Error('请选择有效的采集方式。');
+  if (settings.captureMode === 'smartOrtho' && settings.camera !== '4D') throw new Error('正射三向智能摆拍仅支持 Matrice 4D。');
+  for (const key of ['altitude', 'smartPitch', 'smartYaw', 'terrainSampleSpacing', 'frontOverlap', 'sideOverlap', 'speed', 'heading', 'turnSeconds']) {
     if (!Number.isFinite(settings[key])) throw new Error(`参数 ${key} 必须为有效数值。`);
   }
   if (settings.altitude <= 0 || settings.altitude > 1000) throw new Error('规划航高应在 0–1000 米之间。');
-  if (settings.buildingHeight < 0 || settings.dockHeight < 0 || settings.clearance < 0) throw new Error('建筑高度、机场高度和净空不能为负数。');
-  if (settings.altitude - settings.buildingHeight <= 0 || settings.altitude - settings.buildingHeight < settings.clearance) throw new Error('航高不足：距最高建筑的高度小于要求净空，请提高航高或修改分区。');
+  if (settings.terrainSampleSpacing < 5 || settings.terrainSampleSpacing > 100) throw new Error('地形采样间距应在 5–100 米之间。');
+  if(settings.smartPitch < -65 || settings.smartPitch > -60 || settings.smartYaw < 25 || settings.smartYaw > 30) throw new Error('三向侧视俯仰应为 −65° 至 −60°，左右偏航幅度应为 25° 至 30°。');
   if (settings.frontOverlap < 50 || settings.frontOverlap > 95 || settings.sideOverlap < 50 || settings.sideOverlap > 95) throw new Error('航向和旁向重叠率须在 50%–95% 之间。');
   if (settings.speed <= 0 || settings.speed > 25) throw new Error('拍摄速度须大于 0 且不超过 25 米/秒。');
   if (settings.turnSeconds < 0 || settings.turnSeconds > 60) throw new Error('单次转弯预留应在 0–60 秒之间。');
@@ -158,12 +164,12 @@ function cameraGeometry(settings) {
   const camera = CAMERA_PROFILES[settings.camera];
   const pixelDiagonal = Math.hypot(camera.width, camera.height);
   const scale = 2 * Math.tan(camera.diagonalFov * Math.PI / 360) / pixelDiagonal;
-  const roofHeight = settings.altitude - settings.buildingHeight;
   return {
     gsdCm: settings.altitude * scale * 100,
-    roofGsdCm: roofHeight * scale * 100,
-    lineSpacingM: roofHeight * scale * camera.width * (1 - settings.sideOverlap / 100),
-    shotSpacingM: roofHeight * scale * camera.height * (1 - settings.frontOverlap / 100),
+    footprintWidthM: settings.altitude * scale * camera.width,
+    footprintLengthM: settings.altitude * scale * camera.height,
+    lineSpacingM: settings.altitude * scale * camera.width * (1 - settings.sideOverlap / 100),
+    shotSpacingM: settings.altitude * scale * camera.height * (1 - settings.frontOverlap / 100),
   };
 }
 
@@ -345,7 +351,7 @@ function createNavigator(polygon) {
   };
 }
 
-/** Plan a flat-reference capture route, not a collision-cleared executable mission. */
+/** Plan the horizontal capture geometry; terrain-route completes its elevations. */
 export function planMission(ringLL, options = {}, holesLL = []) {
   const settings = validateOptions(options), polygon = preparePolygon(ringLL, holesLL);
   const geometry = cameraGeometry(settings);
@@ -368,7 +374,8 @@ export function planMission(ringLL, options = {}, holesLL = []) {
   scans = [...firstCoverage.legs, ...secondCoverage.legs];
   const coverageAddedRows = firstCoverage.addedRows + secondCoverage.addedRows;
   if (scans.length > MAX_LEGS) throw new Error('航段数量超过 4000，请拆分作业区域。');
-  const expectedPhotos = scans.reduce((sum, leg) => sum + Math.max(1, Math.ceil(dist(leg.start, leg.end) / geometry.shotSpacingM)) + 1, 0);
+  const directionsPerStation = settings.captureMode === 'smartOrtho' ? 3 : 1;
+  const expectedPhotos = directionsPerStation * scans.reduce((sum, leg) => sum + Math.max(1, Math.ceil(dist(leg.start, leg.end) / geometry.shotSpacingM)) + 1, 0);
   if (expectedPhotos > MAX_PHOTOS) throw new Error(`预计照片超过 ${MAX_PHOTOS} 张，请拆分作业区域。`);
 
   const navigate = createNavigator(polygon), inverse = polygon.projection.inverse;
@@ -385,13 +392,14 @@ export function planMission(ringLL, options = {}, holesLL = []) {
     const length = dist(scan.start, scan.end), intervals = Math.max(1, Math.ceil(length / geometry.shotSpacingM));
     const legPhotos = Array.from({ length: intervals + 1 }, (_, n) => inverse(lerp(scan.start, scan.end, n / intervals)));
     const start = legPhotos[0], end = legPhotos.at(-1);
-    legs.push({ id: i + 1, pass: scan.pass, start, end, photos: legPhotos });
+    const flightHeadingDeg = ((Math.atan2(scan.end[0]-scan.start[0],scan.end[1]-scan.start[1])*180/Math.PI)%360+360)%360;
+    legs.push({ id: i + 1, pass: scan.pass, start, end, photos: legPhotos, flightHeadingDeg });
     if (!i) path.push(start);
     path.push(end); photos.push(...legPhotos); captureDistanceM += length;
   }
   const distanceM = captureDistanceM + transitDistanceM;
   const warnings = [
-    '这是基于平面地面与最高建筑高度的采集预规划；尚未载入 DSM，未校核街巷遮挡、真实地形或三维障碍物，不能保证真正射成果完整性。',
+    '高度仅以在线地形为依据，不考虑建筑、树木或其他障碍物；DEM 不是建筑 DSM，不能据此保证城市真正射成果或飞行净空。',
     '航段与转场均限制在所绘边界内；连接可贴边绕行，尚未预留水平安全距离，也未外扩补拍。边缘影像多视角覆盖需另行检查。',
     '影像足迹与 GSD 由标称对角视场角近似计算，未使用相机标定参数；实际照片模式、畸变校正和拍摄间隔需现场确认。',
     '预计时间只包含区内拍摄、连接和转弯；未计入机场往返、起降爬升、风、电量储备与分架次。该结果不等于可直接执行的飞行任务。',
@@ -402,19 +410,32 @@ export function planMission(ringLL, options = {}, holesLL = []) {
     return length / Math.max(1, Math.ceil(length / geometry.shotSpacingM));
   }));
   if (minimumActualSpacing / settings.speed < camera.minInterval) warnings.push(`部分航段的照片间隔低于该机型 JPEG 参考最短间隔 ${camera.minInterval} 秒，执行前需降低速度或采用停悬拍照，并确认照片模式与固件能力。`);
-  if (settings.altitude <= settings.dockHeight) warnings.push('规划航高不高于机场屋顶；从机场出场至测区的下降路径需要单独设计并核查。');
+  if (settings.captureMode === 'smartOrtho') {
+    warnings.push(`三向近似姿态采用用户参数：侧向俯仰 ${settings.smartPitch}°，左右偏航 ±${settings.smartYaw}°，横滚 0°。足迹在采集站地形高度的水平面上估算，不是逐像素与真实地形求交。`);
+    warnings.push('三向模式保留下视间距，照片按每站三张作预算；用户近似姿态不代表 DJI 原生任务的实际曝光位置、顺序或时序。');
+    warnings.push('区内用时未包含三向摆动、稳定与曝光周期。大疆作业指南提示正射摆拍可能降低最终正射质量，需按成果要求确认是否使用。');
+    if (minimumActualSpacing / settings.speed < 3 * camera.minInterval) warnings.push('部分站间飞行时间小于三张 JPEG 的参考拍照周期预算，且尚未计云台摆动时间；需在原生任务中验证航速。');
+  }
   if (settings.autoHeading) warnings.push('自动航向以每 15° 采样的区内距离和转弯估算选择，尚未计入风向与机场进出方向，不代表全局最优。');
   if (coverageAddedRows) warnings.push(`已为细长突出部或尖角补充 ${coverageAddedRows} 条扫描行，满足近似平面足迹的至少一次覆盖；边缘多视角重叠仍需进一步校核。`);
   return {
     legs, connections, photos, path, heading,
+    captureModel: createCaptureModel(camera, settings),
+    captureRequests: legs.flatMap(leg=>leg.photos.map(position=>({position,legId:leg.id,flightHeadingDeg:leg.flightHeadingDeg}))).map((request,stationIndex)=>({
+      ...request,stationIndex,mode:settings.captureMode,directionCount:directionsPerStation,nativeAngles:null,nativeTiming:null,
+    })),
+    projectionOrigin: polygon.projection.origin,
+    heightMode: 'terrainAGL', captureMode: settings.captureMode,
+    terrain: { status: 'pending' },
     stats: {
       areaM2: polygon.areaM2, distanceM, captureDistanceM, transitDistanceM,
-      photoCount: photos.length, legCount: legs.length,
+      photoCount: photos.length * directionsPerStation, stationCount: photos.length, legCount: legs.length,
+      photoCountIsEstimate: settings.captureMode === 'smartOrtho',
+      captureTimingIncluded: false,
       coverageAddedRows,
       durationSeconds: distanceM / settings.speed + Math.max(0, legs.length - 1) * settings.turnSeconds,
       ...geometry,
-      minClearanceM: settings.altitude - settings.buildingHeight,
-      relativeDockHeightM: settings.altitude - settings.dockHeight,
+      aglM: settings.altitude,
     },
     warnings,
   };
