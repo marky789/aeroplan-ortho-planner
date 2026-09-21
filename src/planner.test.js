@@ -6,7 +6,7 @@ const origin = [116.39, 39.9];
 const frame = createLocalProjection([origin]);
 const ll = points => points.map(frame.inverse);
 const rectangle = [[0, 0], [300, 0], [300, 200], [0, 200]];
-const baseOptions = { ...DEFAULT_OPTIONS, autoHeading: false, heading: 90 };
+const baseOptions = { ...DEFAULT_OPTIONS, frontOverlap: 85, sideOverlap: 80, autoHeading: false, heading: 90 };
 const length = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
 function pointInOrOnRing(p, ring) {

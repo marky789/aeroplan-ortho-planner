@@ -9,6 +9,7 @@ import {
 import { CGCS2000_ELLIPSOID, createTiandituLayers } from './tianditu.js';
 import { createOnlineTerrain } from './terrain-source.js';
 import { createLocalProjection } from './planner.js';
+import { measureBoundary, formatDistance } from './boundary-measurement.js';
 
 const GREEN = Color.fromCssColorString('#35e5b0');
 const WHITE = Color.fromCssColorString('#ffffff');
@@ -37,7 +38,9 @@ export function createMap(container, callbacks) {
   const areas = new CustomDataSource('area');
   const routes = new CustomDataSource('route');
   const sketches = new CustomDataSource('sketch');
+  const measurements = new CustomDataSource('boundary-distances');
   viewer.dataSources.add(areas); viewer.dataSources.add(routes); viewer.dataSources.add(sketches);
+  viewer.dataSources.add(measurements);
   const photoPoints = viewer.scene.primitives.add(new PointPrimitiveCollection());
   let mode = null, draft = [], hover = null, model = null, is3D = false;
   let showPhotos = false, drag = null, frame = null, moving = null;
@@ -77,22 +80,66 @@ export function createMap(container, callbacks) {
       heightReference:p.length<3?HeightReference.CLAMP_TO_GROUND:HeightReference.NONE,
     } } : {}) });
   }
+  function measuredBoundary(points, options) {
+    // A draft can temporarily span an unsupported geodesic; keep editing usable.
+    try { return measureBoundary(points, options); }
+    catch { return { segments: [], confirmedLengthM: 0, perimeterM: 0, unavailable: true }; }
+  }
+  function distanceLabels(target, measurement, color) {
+    for (const edge of measurement.segments) {
+      const prefix = edge.kind === 'preview' ? '预览 ' : edge.kind === 'closing' ? '待闭合 ' : '';
+      target.entities.add({ position: LL(edge.midpoint), label: {
+        text: `${prefix}${formatDistance(edge.distanceM)}`, font: '500 12px sans-serif',
+        fillColor: color, showBackground: true,
+        backgroundColor: Color.fromCssColorString('#172c31').withAlpha(.88),
+        backgroundPadding: new Cartesian2(6, 4), pixelOffset: new Cartesian2(0, -7),
+        style: LabelStyle.FILL, verticalOrigin: VerticalOrigin.BOTTOM,
+        disableDepthTestDistance: Infinity, heightReference: HeightReference.CLAMP_TO_GROUND,
+      } });
+    }
+  }
+  function drawBoundary(ring, holes, dock) {
+    areas.entities.removeAll(); measurements.entities.removeAll();
+    const outerMeasurement = measuredBoundary(ring, { closed: true });
+    if (ring.length >= 3) {
+      areas.entities.add({ polygon: {
+        hierarchy: new PolygonHierarchy(ring.map(LL), holes.map(h => new PolygonHierarchy(h.map(LL)))),
+        material: GREEN.withAlpha(.12),
+      } });
+      polyline(areas, [...ring, ring[0]], GREEN, 3);
+      ring.forEach((p, i) => point(areas, p, null, GREEN, `vertex-${i}`));
+      distanceLabels(measurements, outerMeasurement, GREEN);
+      holes.forEach(h => {
+        polyline(areas, [...h, h[0]], AMBER, 2);
+        distanceLabels(measurements, measuredBoundary(h, { closed: true }), AMBER);
+      });
+    }
+    if (dock) point(areas, dock.slice(0,2), '机场位置', Color.fromCssColorString('#5ab9ff'));
+    if (!mode) callbacks.onMeasure?.(outerMeasurement, false);
+  }
   function sketch() {
     sketches.entities.removeAll();
+    if (!mode || mode === 'dock') { callbacks.onDraft?.(draft.length); request(); return; }
     const positions = [...draft, ...(hover && draft.length ? [hover] : [])];
+    const measurement = measuredBoundary(draft, { hover });
+    const color = mode === 'hole' ? AMBER : GREEN;
     if (positions.length > 2) sketches.entities.add({ polygon: {
       hierarchy: new PolygonHierarchy(positions.map(LL)),
       material: (mode === 'hole' ? AMBER : GREEN).withAlpha(.13),
     } });
-    polyline(sketches, positions, mode === 'hole' ? AMBER : GREEN, 2);
-    draft.forEach((p, i) => point(sketches, p, String(i + 1), mode === 'hole' ? AMBER : GREEN));
+    for (const edge of measurement.segments) polyline(sketches, [edge.start, edge.end], color, 2, edge.kind !== 'confirmed');
+    distanceLabels(sketches, measurement, color);
+    draft.forEach((p, i) => point(sketches, p, String(i + 1), color));
+    callbacks.onMeasure?.(measurement, true);
     callbacks.onDraft?.(draft.length); request();
   }
   function setMode(next) {
     stopPreview(); mode = next; draft = []; hover = null;
+    measurements.show = !next;
     viewer.canvas.classList.toggle('drawing', !!next);
     viewer.scene.screenSpaceCameraController.enableRotate = !next;
     sketch(); callbacks.onMode?.(mode);
+    if (!next && model) callbacks.onMeasure?.(measuredBoundary(model.ring, { closed: true }), false);
   }
   function finish() {
     if (!mode || mode === 'dock' || draft.length < 3) return false;
@@ -125,7 +172,8 @@ export function createMap(container, callbacks) {
     if (!p) return;
     callbacks.onCoordinate?.(p);
     if (drag !== null && model) {
-      areas.entities.getById(`vertex-${drag}`).position = LL(p);
+      const previewRing = model.ring.map((point, index) => index === drag ? p : point);
+      drawBoundary(previewRing, model.holes || [], model.dock);
       request();
       return;
     }
@@ -138,20 +186,13 @@ export function createMap(container, callbacks) {
     viewer.scene.screenSpaceCameraController.enableTranslate = true;
     const p = pick(event.position);
     if (p) callbacks.onVertexMove?.(index, p);
+    else if (model) { drawBoundary(model.ring, model.holes || [], model.dock); request(); }
   }, ScreenSpaceEventType.LEFT_UP);
   function draw(nextModel) {
     stopPreview(); model = nextModel;
-    areas.entities.removeAll(); routes.entities.removeAll(); photoPoints.removeAll();
+    routes.entities.removeAll(); photoPoints.removeAll();
     const { ring = [], holes = [], plan, dock } = model;
-    if (ring.length >= 3) {
-      areas.entities.add({ polygon: {
-        hierarchy: new PolygonHierarchy(ring.map(LL), holes.map(h => new PolygonHierarchy(h.map(LL)))),
-        material: GREEN.withAlpha(.12),
-      } });
-      polyline(areas, [...ring, ring[0]], GREEN, 3);
-      ring.forEach((p, i) => point(areas, p, null, GREEN, `vertex-${i}`));
-      holes.forEach(h => polyline(areas, [...h, h[0]], AMBER, 2));
-    }
+    drawBoundary(ring, holes, dock);
     if (plan) {
       plan.legs.forEach(leg => polyline(routes, leg.positions || [leg.start, leg.end],
         leg.pass === 2 ? GREEN.withAlpha(.65) : GREEN, 2));
@@ -175,7 +216,6 @@ export function createMap(container, callbacks) {
         }
       }
     }
-    if (dock) point(areas, dock.slice(0,2), '机场位置', Color.fromCssColorString('#5ab9ff'));
     request();
   }
   function fit(ring = model?.ring, duration = .8) {

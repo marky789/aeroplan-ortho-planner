@@ -6,7 +6,7 @@ import { attachTerrainToPlan } from '../src/terrain-route.js';
 test('Word reference worked example remains reproducible', () => {
   const frame = createLocalProjection([[116.39, 39.9]]);
   const ring = [[0, 0], [300, 0], [300, 200], [0, 200]].map(frame.inverse);
-  const plan = planMission(ring, { autoHeading: false, heading: 90 });
+  const plan = planMission(ring, { autoHeading: false, heading: 90, frontOverlap: 85, sideOverlap: 80 });
   assert.equal(plan.heading, 90);
   assert.equal(plan.stats.legCount, 7);
   assert.equal(plan.stats.photoCount, 140);
@@ -28,7 +28,7 @@ test('Word reference flat height and analytical slope examples remain reproducib
   const ring=[[0,0],[300,0],[300,200],[0,200]].map(frame.inverse);
   // The existing Word reference is intentionally unchanged; its flat-height
   // distance/time example uses the original nadir scan grid.
-  const options={autoHeading:false,heading:90,captureMode:'nadir'};
+  const options={autoHeading:false,heading:90,captureMode:'nadir',frontOverlap:85,sideOverlap:80};
   const horizontal=planMission(ring,options);
   const flat=await attachTerrainToPlan(horizontal,options,async p=>p.map(()=>50),{source:'test',verticalDatum:'source-orthometric'});
   assert.equal(flat.stats.photoCount,140);

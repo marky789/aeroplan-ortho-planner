@@ -2,9 +2,10 @@ import 'cesium/Build/Cesium/Widgets/widgets.css';
 import './style.css';
 import { createIcons, ScanLine, Check, CircleHelp, Download, ChevronDown, FileJson, Table2, ArrowUpRight, Pentagon, Upload, Undo2, Trash2, Grid2x2, RefreshCw, MapPin, Layers, SquareDashed, MapPinPlus, Camera, X, Scan, Compass, Plus, Minus, Play, Pause, Info, ArrowRight } from 'lucide';
 import { createMap } from './map.js';
-import { DEFAULT_OPTIONS, validatePolygon, validateOptions } from './planner.js';
+import { DEFAULT_OPTIONS, applyCameraPreset, validatePolygon, validateOptions } from './planner.js';
 import { attachTerrainToPlan } from './terrain-route.js';
 import { exportMission, exportStationsCsv } from './mission-export.js';
+import { formatDistance } from './boundary-measurement.js';
 const icons={ScanLine,Check,CircleHelp,Download,ChevronDown,FileJson,Table2,ArrowUpRight,Pentagon,Upload,Undo2,Trash2,Grid2x2,RefreshCw,MapPin,Layers,SquareDashed,MapPinPlus,Camera,X,Scan,Compass,Plus,Minus,Play,Pause,Info,ArrowRight};
 
 // Visual thesis: a quiet ivory inspector beside an edge-to-edge satellite workspace,
@@ -46,6 +47,7 @@ $('app').innerHTML=`
           <div class="area-actions"><button id="import" class="button subtle">${icon('upload')} 导入范围</button><button id="undo" class="icon-button" aria-label="撤销操作" title="撤销">${icon('undo-2')}</button><button id="clear" class="icon-button" aria-label="清空作业区" title="清空">${icon('trash-2')}</button></div>
           <input id="import-file" type="file" accept=".json,.geojson" hidden>
           <div class="area-description"><span id="vertex-count">6 个边界点</span><span id="hole-count">无排除区域</span></div>
+          <p class="field-hint" id="boundary-summary" role="status">选择两个点后显示边长 · 椭球面距离</p>
         </section>
         <section class="control-section">
           <div class="section-heading"><h2><span>02</span> 采集设置</h2><span class="section-note">地形跟随</span></div>
@@ -54,8 +56,9 @@ $('app').innerHTML=`
           <p class="field-hint" id="capture-hint">按垂直影像足迹规划采集站。</p>
           <div id="smart-fields" hidden><div class="two-fields"><label class="field-label" for="sideTiltDeg">横向侧摆角 β<div class="number-wrap"><input id="sideTiltDeg" type="number" min="0" max="80" step=".5"><span>°</span></div></label><label class="field-label" for="qualityCutoffDeg">质量截断角 θq<div class="number-wrap"><input id="qualityCutoffDeg" type="number" min="1" max="80" step="1"><span>°</span></div></label></div><p class="field-hint">β 是光轴横向偏离垂直的角度；默认值为待实测示例。θq 限制可用边缘视角。开启“拍照点”可查看近似足迹。</p><label class="field-label" for="captureCycleSeconds">实测整组三向周期（可选）<div class="number-wrap"><input id="captureCycleSeconds" type="number" min=".1" max="60" step=".1" placeholder="未测，留空"><span>s</span></div></label><p class="field-hint">填写一次左、中、右采集的实测完整周期；留空时无法验证三向周期对应的速度上限。</p></div>
           <div class="two-fields"><label class="field-label" for="altitude">固定离地高度<div class="number-wrap"><input id="altitude" type="number" min="20" max="500" step="5"><span>m</span></div></label><label class="field-label" for="speed">区内飞行速度<div class="number-wrap"><input id="speed" type="number" min="1" max="15" step=".5"><span>m/s</span></div></label></div>
-          <div class="range-heading"><label id="front-label" for="frontOverlap">航向重叠率</label><output id="front-output">85<span>%</span></output></div><input id="frontOverlap" type="range" min="60" max="95" step="1">
-          <div class="range-heading"><label id="side-label" for="sideOverlap">旁向重叠率</label><output id="side-output">80<span>%</span></output></div><input id="sideOverlap" type="range" min="50" max="95" step="1">
+          <div class="range-heading"><label id="front-label" for="frontOverlap">航向重叠率</label><output id="front-output">80<span>%</span></output></div><input id="frontOverlap" type="range" min="60" max="95" step="1">
+          <div class="range-heading"><label id="side-label" for="sideOverlap">旁向重叠率</label><output id="side-output">70<span>%</span></output></div><input id="sideOverlap" type="range" min="50" max="95" step="1">
+          <p class="field-hint">切换相机后恢复 Dock 3 默认重叠率：航向 80%、旁向 70%，可继续手动调整。</p>
           <p class="field-hint" id="swath-calculation" role="status">生成航线后显示扫宽与目标行距。</p>
         </section>
         <section class="control-section">
@@ -177,6 +180,9 @@ map=createMap('cesium-container',{
   onCoordinate:p=>{$('coordinates').textContent=`${p[0].toFixed(6)}° E   ${p[1].toFixed(6)}° N`;},
   onMode:mode=>{drawing=mode;$('drawing-guide').hidden=!mode;$('drawing-text').textContent=mode==='dock'?'点击地图标记机场位置':'单击添加边界点 · 右键完成 · Esc 取消';$('finish-draw').hidden=mode==='dock';['tool-area','tool-hole','tool-dock'].forEach((id,i)=>$(id).classList.toggle('active',mode===['area','hole','dock'][i]));$('draw').classList.toggle('is-drawing',!!mode);},
   onDraft:count=>{$('finish-draw').disabled=count<3;if(drawing && drawing!=='dock')$('drawing-text').textContent=`已添加 ${count} 个点 · 右键完成 · Esc 取消`;},
+  onMeasure:(measurement,isDraft)=>{
+    $('boundary-summary').textContent=measurement.unavailable?'当前跨度无法测距，请缩小作业范围':isDraft?`已选边长 ${formatDistance(measurement.confirmedLengthM)}${measurement.segments.length>=3?` · 预览周长 ${formatDistance(measurement.perimeterM)}`:''} · 椭球面距离`:state.ring.length>=3?`外边界周长 ${formatDistance(measurement.perimeterM)} · 椭球面距离`:'选择两个点后显示边长 · 椭球面距离';
+  },
   onComplete:(type,ring)=>{
     const nextRing=type==='area'?ring:state.ring,nextHoles=type==='area'?[]:[...state.holes,ring];
     const check=validatePolygon(nextRing,nextHoles);
@@ -201,8 +207,14 @@ for(const key of ['camera','captureMode','sideTiltDeg','qualityCutoffDeg','captu
   const el=$(key);el.addEventListener(el.type==='range'?'input':'change',()=>{
     const emptyCycle=key==='captureCycleSeconds'&&el.value.trim()==='';
     if(el.type==='number'&&!emptyCycle&&(!el.value||!el.checkValidity())){el.value=state.options[key]??'';notify('请输入范围内的有效数值，已恢复上次设置');return;}
-    state.options[key]=el.type==='checkbox'?el.checked:['camera','captureMode'].includes(key)?el.value:emptyCycle?null:Number(el.value);
-    updateLabels();schedule();
+    if(key==='camera') {
+      state.options=applyCameraPreset(state.options,el.value);
+      syncInputs();
+    } else {
+      state.options[key]=el.type==='checkbox'?el.checked:key==='captureMode'?el.value:emptyCycle?null:Number(el.value);
+      updateLabels();
+    }
+    schedule();
   });
 }
 $('recompute').onclick=()=>schedule(true);

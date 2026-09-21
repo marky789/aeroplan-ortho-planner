@@ -10,10 +10,21 @@ export const CAMERA_PROFILES = Object.freeze({
   '4TD48': { name: 'Matrice 4TD · 48 MP', width: 8064, height: 6048, diagonalFov: 82, minInterval: 0.7 },
 });
 
+// DJI Dock 3 / Matrice 4D Series Operation Guidebook (CN), section 5.1, p. 61.
+// https://dl.djicdn.com/downloads/DJI_Dock_3/Operation_Guidebook/DJI_Dock_3_Matrice_4D_Series_Operation_Guidebook_CN.pdf
+export const DOCK3_OVERLAP_DEFAULTS = Object.freeze({ frontOverlap: 80, sideOverlap: 70 });
+
+/** Apply a deliberate camera selection without resetting other mission choices. */
+export function applyCameraPreset(options, camera) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error('规划参数必须是有效对象。');
+  if (typeof camera !== 'string' || !Object.hasOwn(CAMERA_PROFILES, camera)) throw new Error('请选择有效的相机型号与照片模式。');
+  return { ...options, camera, ...DOCK3_OVERLAP_DEFAULTS };
+}
+
 export const DEFAULT_OPTIONS = Object.freeze({
   camera: '4D', captureMode: 'nadir', altitude: 100,
   sideTiltDeg: 20, qualityCutoffDeg: 45, captureCycleSeconds: null,
-  terrainSampleSpacing: 30, frontOverlap: 85, sideOverlap: 80, speed: 6,
+  terrainSampleSpacing: 30, ...DOCK3_OVERLAP_DEFAULTS, speed: 6,
   heading: 0, autoHeading: true, crossGrid: false, turnSeconds: 3,
 });
 

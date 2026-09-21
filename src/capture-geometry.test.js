@@ -15,6 +15,7 @@ const settings = overrides => ({
   ...DEFAULT_OPTIONS,
   camera: '4TD48', captureMode: 'smartOrtho', altitude: 100,
   sideTiltDeg: 20, qualityCutoffDeg: 45, captureCycleSeconds: null,
+  frontOverlap: 85, sideOverlap: 80,
   autoHeading: false, heading: 90,
   ...overrides,
 });
