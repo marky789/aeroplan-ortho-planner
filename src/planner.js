@@ -12,7 +12,7 @@ export const CAMERA_PROFILES = Object.freeze({
 
 export const DEFAULT_OPTIONS = Object.freeze({
   camera: '4D', captureMode: 'nadir', altitude: 100,
-  smartPitch: -62.5, smartYaw: 27.5,
+  sideTiltDeg: 20, qualityCutoffDeg: 45, captureCycleSeconds: null,
   terrainSampleSpacing: 30, frontOverlap: 85, sideOverlap: 80, speed: 6,
   heading: 0, autoHeading: true, crossGrid: false, turnSeconds: 3,
 });
@@ -147,20 +147,21 @@ export function validateOptions(options) {
   if (typeof settings.camera !== 'string' || !Object.hasOwn(CAMERA_PROFILES, settings.camera)) throw new Error('请选择有效的相机型号与照片模式。');
   if (typeof settings.autoHeading !== 'boolean' || typeof settings.crossGrid !== 'boolean') throw new Error('自动航向与双网格参数必须为布尔值。');
   if (!['nadir', 'smartOrtho'].includes(settings.captureMode)) throw new Error('请选择有效的采集方式。');
-  if (settings.captureMode === 'smartOrtho' && settings.camera !== '4D') throw new Error('正射三向智能摆拍仅支持 Matrice 4D。');
-  for (const key of ['altitude', 'smartPitch', 'smartYaw', 'terrainSampleSpacing', 'frontOverlap', 'sideOverlap', 'speed', 'heading', 'turnSeconds']) {
+  for (const key of ['altitude', 'sideTiltDeg', 'qualityCutoffDeg', 'terrainSampleSpacing', 'frontOverlap', 'sideOverlap', 'speed', 'heading', 'turnSeconds']) {
     if (!Number.isFinite(settings[key])) throw new Error(`参数 ${key} 必须为有效数值。`);
   }
   if (settings.altitude <= 0 || settings.altitude > 1000) throw new Error('规划航高应在 0–1000 米之间。');
   if (settings.terrainSampleSpacing < 5 || settings.terrainSampleSpacing > 100) throw new Error('地形采样间距应在 5–100 米之间。');
-  if(settings.smartPitch < -65 || settings.smartPitch > -60 || settings.smartYaw < 25 || settings.smartYaw > 30) throw new Error('三向侧视俯仰应为 −65° 至 −60°，左右偏航幅度应为 25° 至 30°。');
+  if (settings.sideTiltDeg < 0 || settings.sideTiltDeg > 80) throw new Error('侧摆角 β 应在 0°–80° 之间，且须满足投影连续与地平线约束。');
+  if (settings.qualityCutoffDeg < 1 || settings.qualityCutoffDeg > 80) throw new Error('质量截断角 θq 应在 1°–80° 之间。');
+  if (settings.captureCycleSeconds !== null && (!Number.isFinite(settings.captureCycleSeconds) || settings.captureCycleSeconds < 0.1 || settings.captureCycleSeconds > 60)) throw new Error('实测三向周期须为 0.1–60 秒；未知时请留空。');
   if (settings.frontOverlap < 50 || settings.frontOverlap > 95 || settings.sideOverlap < 50 || settings.sideOverlap > 95) throw new Error('航向和旁向重叠率须在 50%–95% 之间。');
   if (settings.speed <= 0 || settings.speed > 25) throw new Error('拍摄速度须大于 0 且不超过 25 米/秒。');
   if (settings.turnSeconds < 0 || settings.turnSeconds > 60) throw new Error('单次转弯预留应在 0–60 秒之间。');
   return settings;
 }
 
-function cameraGeometry(settings) {
+function cameraGeometry(settings, captureModel) {
   const camera = CAMERA_PROFILES[settings.camera];
   const pixelDiagonal = Math.hypot(camera.width, camera.height);
   const scale = 2 * Math.tan(camera.diagonalFov * Math.PI / 360) / pixelDiagonal;
@@ -168,7 +169,13 @@ function cameraGeometry(settings) {
     gsdCm: settings.altitude * scale * 100,
     footprintWidthM: settings.altitude * scale * camera.width,
     footprintLengthM: settings.altitude * scale * camera.height,
-    lineSpacingM: settings.altitude * scale * camera.width * (1 - settings.sideOverlap / 100),
+    effectiveSwathWidthM: captureModel.swath.widthM,
+    theoreticalSwathWidthM: captureModel.swath.theoreticalWidthM,
+    qualityNadirWidthM: Math.min(settings.altitude * scale * camera.width, captureModel.swath.widthM),
+    effectiveEdgeAngleDeg: captureModel.swath.effectiveEdgeAngleDeg,
+    edgeGsdScale: captureModel.swath.edgeGsdScale,
+    edgeGsdCm: settings.altitude * scale * 100 * captureModel.swath.edgeGsdScale,
+    lineSpacingM: captureModel.swath.widthM * (1 - settings.sideOverlap / 100),
     shotSpacingM: settings.altitude * scale * camera.height * (1 - settings.frontOverlap / 100),
   };
 }
@@ -223,15 +230,17 @@ function makeScan(polygon, heading, spacing, pass) {
   return orderScanRows(legs);
 }
 
-// A continuous exposure strip is exactly a rectangle in this flat model:
+// The NADIR exposure strip is exactly a rectangle in this flat model:
 // endpoint exposures are included, and exposure spacing is <= the footprint.
 // Sweep the polygon and rectangle boundaries to detect thin protrusions missed
 // by the regular grid. This checks single-image flat coverage, not visibility,
 // redundant stereo coverage, or true-ortho reconstruction quality.
 function completeFlatCoverage(polygon, heading, initial, geometry, settings, pass) {
   const frame = scanFrame(polygon, heading);
-  const halfWidth = geometry.lineSpacingM / (1 - settings.sideOverlap / 100) / 2;
-  const halfLength = geometry.shotSpacingM / (1 - settings.frontOverlap / 100) / 2;
+  // The equivalent three-view swath is a 1D projection, not a filled footprint.
+  // Use the quality-clipped nadir footprint for this independent no-gap check.
+  const halfWidth = geometry.qualityNadirWidthM / 2;
+  const halfLength = geometry.footprintLengthM / 2;
   const strips = initial.map(leg => {
     const a = frame.rotate(leg.start), b = frame.rotate(leg.end);
     return { left: Math.min(a[0], b[0]) - halfLength, right: Math.max(a[0], b[0]) + halfLength, low: leg.scanY - halfWidth, high: leg.scanY + halfWidth };
@@ -354,7 +363,9 @@ function createNavigator(polygon) {
 /** Plan the horizontal capture geometry; terrain-route completes its elevations. */
 export function planMission(ringLL, options = {}, holesLL = []) {
   const settings = validateOptions(options), polygon = preparePolygon(ringLL, holesLL);
-  const geometry = cameraGeometry(settings);
+  const camera = CAMERA_PROFILES[settings.camera];
+  const captureModel = createCaptureModel(camera, settings);
+  const geometry = cameraGeometry(settings, captureModel);
   let heading = normalizeHeading(settings.heading), scans;
   const build = angle => {
     const first = makeScan(polygon, angle, geometry.lineSpacingM, 1);
@@ -404,23 +415,30 @@ export function planMission(ringLL, options = {}, holesLL = []) {
     '影像足迹与 GSD 由标称对角视场角近似计算，未使用相机标定参数；实际照片模式、畸变校正和拍摄间隔需现场确认。',
     '预计时间只包含区内拍摄、连接和转弯；未计入机场往返、起降爬升、风、电量储备与分架次。该结果不等于可直接执行的飞行任务。',
   ];
-  const camera = CAMERA_PROFILES[settings.camera];
   const minimumActualSpacing = Math.min(...scans.map(leg => {
     const length = dist(leg.start, leg.end);
     return length / Math.max(1, Math.ceil(length / geometry.shotSpacingM));
   }));
-  if (minimumActualSpacing / settings.speed < camera.minInterval) warnings.push(`部分航段的照片间隔低于该机型 JPEG 参考最短间隔 ${camera.minInterval} 秒，执行前需降低速度或采用停悬拍照，并确认照片模式与固件能力。`);
+  const maxSpeedByPhotoMps = minimumActualSpacing / camera.minInterval;
+  const maxSpeedByCycleMps = settings.captureMode === 'smartOrtho' && settings.captureCycleSeconds !== null ? minimumActualSpacing / settings.captureCycleSeconds : null;
+  const maxSpeedMps = Math.min(maxSpeedByPhotoMps, maxSpeedByCycleMps ?? Infinity);
+  const photoIntervalSatisfied = settings.speed <= maxSpeedByPhotoMps + 1e-9;
+  const captureCycleSatisfied = maxSpeedByCycleMps === null ? null : settings.speed <= maxSpeedByCycleMps + 1e-9;
+  const speedConstraintsSatisfied = !photoIntervalSatisfied || captureCycleSatisfied === false ? false : settings.captureMode === 'smartOrtho' && captureCycleSatisfied === null ? null : true;
+  if (!photoIntervalSatisfied) warnings.push(`部分航段的照片间隔低于该机型 JPEG 参考最短间隔 ${camera.minInterval} 秒，按实际最短站距计算的航速上限为 ${maxSpeedByPhotoMps.toFixed(2)} 米/秒。当前输入速度未自动调整。`);
   if (settings.captureMode === 'smartOrtho') {
-    warnings.push(`三向近似姿态采用用户参数：侧向俯仰 ${settings.smartPitch}°，左右偏航 ±${settings.smartYaw}°，横滚 0°。足迹在采集站地形高度的水平面上估算，不是逐像素与真实地形求交。`);
-    warnings.push('三向模式保留下视间距，照片按每站三张作预算；用户近似姿态不代表 DJI 原生任务的实际曝光位置、顺序或时序。');
-    warnings.push('区内用时未包含三向摆动、稳定与曝光周期。大疆作业指南提示正射摆拍可能降低最终正射质量，需按成果要求确认是否使用。');
-    if (minimumActualSpacing / settings.speed < 3 * camera.minInterval) warnings.push('部分站间飞行时间小于三张 JPEG 的参考拍照周期预算，且尚未计云台摆动时间；需在原生任务中验证航速。');
+    warnings.push(`三向按文档横向截面建模：侧摆角 β=${settings.sideTiltDeg}°，质量截断角 θq=${settings.qualityCutoffDeg}°。β 是偏离垂直的横向光轴角，不能替换为旧偏航角；实际侧摆角与设备任务支持待验证。`);
+    warnings.push(`综合有效扫宽 ${geometry.effectiveSwathWidthM.toFixed(2)} 米，目标行距 ${geometry.lineSpacingM.toFixed(2)} 米；旁向重叠指综合航带，航向站距仍按下视足迹计算。平面漏拍由质量截断后的下视足迹检查并补线，不代表各方向都达到指定重叠率。`);
+    warnings.push(`有效边缘横向 GSD 约为中心的 ${geometry.edgeGsdScale.toFixed(2)} 倍（${geometry.edgeGsdCm.toFixed(2)} 厘米/像素），采用文档 sec²θ 近似。足迹只与采集站地形高度的水平面求交，未计算坡面或建筑遮挡。`);
+    warnings.push('照片按每站三张作预算；几何模型不代表 DJI 原生任务的实际曝光位置、顺序或时序。区内用时按输入速度计算，未追加停悬摆动时间。');
+    if (maxSpeedByCycleMps === null) warnings.push('实测三向完整周期未知，三向周期速度约束尚未校核；不能把单张最短间隔乘以 3 当作固定周期。');
+    else if (!captureCycleSatisfied) warnings.push(`当前速度超过实测三向周期 ${settings.captureCycleSeconds} 秒对应的上限 ${maxSpeedByCycleMps.toFixed(2)} 米/秒；当前速度和预计用时未自动调整。`);
   }
   if (settings.autoHeading) warnings.push('自动航向以每 15° 采样的区内距离和转弯估算选择，尚未计入风向与机场进出方向，不代表全局最优。');
   if (coverageAddedRows) warnings.push(`已为细长突出部或尖角补充 ${coverageAddedRows} 条扫描行，满足近似平面足迹的至少一次覆盖；边缘多视角重叠仍需进一步校核。`);
   return {
     legs, connections, photos, path, heading,
-    captureModel: createCaptureModel(camera, settings),
+    captureModel,
     captureRequests: legs.flatMap(leg=>leg.photos.map(position=>({position,legId:leg.id,flightHeadingDeg:leg.flightHeadingDeg}))).map((request,stationIndex)=>({
       ...request,stationIndex,mode:settings.captureMode,directionCount:directionsPerStation,nativeAngles:null,nativeTiming:null,
     })),
@@ -432,6 +450,12 @@ export function planMission(ringLL, options = {}, holesLL = []) {
       photoCount: photos.length * directionsPerStation, stationCount: photos.length, legCount: legs.length,
       photoCountIsEstimate: settings.captureMode === 'smartOrtho',
       captureTimingIncluded: false,
+      minimumActualStationSpacingM: minimumActualSpacing,
+      maxSpeedByPhotoMps, maxSpeedByCycleMps, maxSpeedMps,
+      nominalMaxSpeedByPhotoMps: geometry.shotSpacingM / camera.minInterval,
+      referenceMinPhotoIntervalSeconds: camera.minInterval,
+      photoIntervalSatisfied, captureCycleSatisfied, speedConstraintsSatisfied,
+      captureCycleVerified: captureCycleSatisfied === true,
       coverageAddedRows,
       durationSeconds: distanceM / settings.speed + Math.max(0, legs.length - 1) * settings.turnSeconds,
       ...geometry,

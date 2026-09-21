@@ -26,10 +26,12 @@ test('Word reference worked example remains reproducible', () => {
 test('Word reference flat height and analytical slope examples remain reproducible', async()=>{
   const frame=createLocalProjection([[116.39,39.9]]);
   const ring=[[0,0],[300,0],[300,200],[0,200]].map(frame.inverse);
-  const options={autoHeading:false,heading:90,captureMode:'smartOrtho'};
+  // The existing Word reference is intentionally unchanged; its flat-height
+  // distance/time example uses the original nadir scan grid.
+  const options={autoHeading:false,heading:90,captureMode:'nadir'};
   const horizontal=planMission(ring,options);
   const flat=await attachTerrainToPlan(horizontal,options,async p=>p.map(()=>50),{source:'test',verticalDatum:'source-orthometric'});
-  assert.equal(flat.stats.photoCount,420);
+  assert.equal(flat.stats.photoCount,140);
   assert.ok(flat.path.every(p=>p[2]===150));
   assert.ok(Math.abs(flat.stats.durationSeconds-396.572268)<0.001);
   const photos=[[0,0],[100,0]].map(frame.inverse);

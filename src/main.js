@@ -50,12 +50,13 @@ $('app').innerHTML=`
         <section class="control-section">
           <div class="section-heading"><h2><span>02</span> 采集设置</h2><span class="section-note">地形跟随</span></div>
           <label class="field-label" for="camera">相机预设</label><div class="select-wrap"><select id="camera"><option value="4D">Matrice 4D · 广角 20 MP</option><option value="4TD12">Matrice 4TD · 广角 12 MP</option><option value="4TD48">Matrice 4TD · 广角 48 MP</option></select>${icon('chevron-down')}</div>
-          <label class="field-label" for="captureMode">采集方式</label><div class="select-wrap"><select id="captureMode"><option value="nadir">垂直拍摄</option><option value="smartOrtho">正射三向智能摆拍 · 4D</option></select>${icon('chevron-down')}</div>
+          <label class="field-label" for="captureMode">采集方式</label><div class="select-wrap"><select id="captureMode"><option value="nadir">垂直拍摄</option><option value="smartOrtho">三向正射 · 文档模型</option></select>${icon('chevron-down')}</div>
           <p class="field-hint" id="capture-hint">按垂直影像足迹规划采集站。</p>
-          <div id="smart-fields" hidden><div class="two-fields"><label class="field-label" for="smartPitch">左右俯仰角<div class="number-wrap"><input id="smartPitch" type="number" min="-65" max="-60" step=".5"><span>°</span></div></label><label class="field-label" for="smartYaw">左右偏航幅度<div class="number-wrap"><input id="smartYaw" type="number" min="25" max="30" step=".5"><span>±°</span></div></label></div><p class="field-hint">中间垂直向下；左右横滚为 0°。开启“拍照点”可查看首站的三向近似足迹。</p></div>
+          <div id="smart-fields" hidden><div class="two-fields"><label class="field-label" for="sideTiltDeg">横向侧摆角 β<div class="number-wrap"><input id="sideTiltDeg" type="number" min="0" max="80" step=".5"><span>°</span></div></label><label class="field-label" for="qualityCutoffDeg">质量截断角 θq<div class="number-wrap"><input id="qualityCutoffDeg" type="number" min="1" max="80" step="1"><span>°</span></div></label></div><p class="field-hint">β 是光轴横向偏离垂直的角度；默认值为待实测示例。θq 限制可用边缘视角。开启“拍照点”可查看近似足迹。</p><label class="field-label" for="captureCycleSeconds">实测整组三向周期（可选）<div class="number-wrap"><input id="captureCycleSeconds" type="number" min=".1" max="60" step=".1" placeholder="未测，留空"><span>s</span></div></label><p class="field-hint">填写一次左、中、右采集的实测完整周期；留空时无法验证三向周期对应的速度上限。</p></div>
           <div class="two-fields"><label class="field-label" for="altitude">固定离地高度<div class="number-wrap"><input id="altitude" type="number" min="20" max="500" step="5"><span>m</span></div></label><label class="field-label" for="speed">区内飞行速度<div class="number-wrap"><input id="speed" type="number" min="1" max="15" step=".5"><span>m/s</span></div></label></div>
-          <div class="range-heading"><label for="frontOverlap">航向重叠率</label><output id="front-output">85<span>%</span></output></div><input id="frontOverlap" type="range" min="60" max="95" step="1">
-          <div class="range-heading"><label for="sideOverlap">旁向重叠率</label><output id="side-output">80<span>%</span></output></div><input id="sideOverlap" type="range" min="50" max="95" step="1">
+          <div class="range-heading"><label id="front-label" for="frontOverlap">航向重叠率</label><output id="front-output">85<span>%</span></output></div><input id="frontOverlap" type="range" min="60" max="95" step="1">
+          <div class="range-heading"><label id="side-label" for="sideOverlap">旁向重叠率</label><output id="side-output">80<span>%</span></output></div><input id="sideOverlap" type="range" min="50" max="95" step="1">
+          <p class="field-hint" id="swath-calculation" role="status">生成航线后显示扫宽与目标行距。</p>
         </section>
         <section class="control-section">
           <div class="section-heading"><h2><span>03</span> 航线布局</h2><label class="switch-label"><input type="checkbox" id="autoHeading"><span class="switch"></span>自动航向</label></div>
@@ -90,7 +91,7 @@ $('app').innerHTML=`
   </main>
   <div id="toast" class="toast" role="status" hidden></div>
   <dialog id="export-dialog"><div class="dialog-heading"><h2>导出规划数据</h2><button id="close-export" class="icon-button" aria-label="关闭导出">${icon('x')}</button></div><p id="export-filename"></p><label class="field-label" for="export-preview">文件内容预览</label><textarea id="export-preview" readonly spellcheck="false"></textarea><p>此文件用于保存和交换规划数据，不直接下发飞行器。</p><div class="export-dialog-actions"><button id="copy-export" class="button subtle">复制完整内容</button><button id="save-export" class="button primary">${icon('download')} 下载文件</button></div></dialog>
-  <dialog id="help-dialog"><div class="dialog-heading"><h2>从一个区域，开始规划</h2><button id="close-help" class="icon-button" aria-label="关闭指南">${icon('x')}</button></div><ol><li><strong>绘制作业区</strong><p>点击地图添加边界点，按 Enter、右键或点击“完成绘制”闭合。支持凹多边形；完成后可拖动边界点。</p></li><li><strong>设置拍摄参数</strong><p>选择机型与采集方式，输入固定离地高度。系统读取在线地形，逐点计算飞行绝对高程。</p></li><li><strong>检查与导出</strong><p>开启拍照点或播放航线，检查区内连接。地形采样完成后，可导出规划 JSON 和采集站高度 CSV。</p></li></ol><div class="help-note">在线地形不含建筑和树木；正高未转为飞控椭球高。三向模式采用保守下视间距预规划，原生摆拍角度与时序待确认，不生成可直接执行的大疆文件。</div><button id="got-it" class="button primary">开始规划 ${icon('arrow-right')}</button></dialog>
+  <dialog id="help-dialog"><div class="dialog-heading"><h2>从一个区域，开始规划</h2><button id="close-help" class="icon-button" aria-label="关闭指南">${icon('x')}</button></div><ol><li><strong>绘制作业区</strong><p>点击地图添加边界点，按 Enter、右键或点击“完成绘制”闭合。支持凹多边形；完成后可拖动边界点。</p></li><li><strong>设置拍摄参数</strong><p>选择机型与采集方式，输入固定离地高度。三向模式按侧摆角 β 合并横向投影，再用质量截断角 θq 限制有效边缘。有效扫宽 ×（1 − 综合旁向重叠率）得到目标行距；采集站距仍按下视航向重叠率计算。系统读取在线地形，逐点计算飞行绝对高程。</p></li><li><strong>检查与导出</strong><p>查看近似边缘 GSD 和速度约束。三向周期应填写实测值；超速时需自行降低飞行速度。开启拍照点或播放航线，检查区内连接。地形采样完成后，可导出规划 JSON 和采集站高度 CSV。</p></li></ol><div class="help-note">4TD 及 4D 使用几何模型预规划，原生任务支持和真实侧摆角待验证。综合航带重叠率不保证单张、各方向影像或真实坡面覆盖；边界和凹角可能补线，航线不外扩。在线地形不含建筑和树木，正高未转为飞控椭球高。不生成可直接执行的大疆文件。</div><button id="got-it" class="button primary">开始规划 ${icon('arrow-right')}</button></dialog>
 `;
 createIcons({icons});
 function notify(message) { $('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3800); }
@@ -98,7 +99,7 @@ function save() { try {localStorage.setItem('aeroplan-mission-v1',JSON.stringify
 function remember(){history.push(structuredClone(state));if(history.length>30)history.shift();}
 function syncInputs(){
   $('mission-name').value=state.name;
-  Object.entries(state.options).forEach(([key,value])=>{const el=$(key);if(el){if(el.type==='checkbox')el.checked=value;else el.value=value;}});
+  Object.entries(state.options).forEach(([key,value])=>{const el=$(key);if(el){if(el.type==='checkbox')el.checked=value;else el.value=value??'';}});
   $('demo-badge').hidden=!state.demo;
   $('location-title').textContent=state.demo?'南山科技园 · 示例区域':'当前作业区域';
   updateLabels();
@@ -106,8 +107,9 @@ function syncInputs(){
 function updateLabels(){
   const smart = state.options.captureMode === 'smartOrtho';
   $('smart-fields').hidden=!smart;
-  $('captureMode').querySelector('[value="smartOrtho"]').disabled=state.options.camera!=='4D';
-  $('capture-hint').textContent=smart?'三向摆拍近似预规划：保留下视间距，照片为预算数，实际动作待原生任务确认。':'按垂直影像足迹规划采集站。';
+  $('capture-hint').textContent=smart?'4TD 及 4D 使用几何模型预规划，原生任务支持和真实侧摆角待验证。按质量截断后的综合等效扫宽计算行距，照片为三向预算数。':'按垂直影像足迹规划采集站。';
+  $('front-label').textContent=smart?'下视航向重叠率':'航向重叠率';
+  $('side-label').textContent=smart?'综合航带旁向重叠率':'旁向重叠率';
   $('front-output').textContent=`${state.options.frontOverlap}%`;
   $('side-output').textContent=`${state.options.sideOverlap}%`;
   $('heading-output').textContent=state.options.autoHeading?(plan?`${plan.heading.toFixed(0)}° · 自动`:'自动'):`${state.options.heading}°`;
@@ -125,12 +127,17 @@ function displayPlan(){
   metric('metric-time',s?(s.durationSeconds/60).toFixed(1):'—','min');
   metric('metric-photos',s?s.photoCount.toLocaleString():'—','张');
   metric('metric-gsd',s?s.gsdCm.toFixed(2):'—','cm/px');
+  $('swath-calculation').textContent=s?`${plan.captureMode==='smartOrtho'?`理论综合扫宽 ${s.theoreticalSwathWidthM.toFixed(2)} m；有效边缘角 ${s.effectiveEdgeAngleDeg.toFixed(2)}°；质量截断后有效扫宽`:'下视扫宽'} ${s.effectiveSwathWidthM.toFixed(2)} m × (1 − ${state.options.sideOverlap}%) = 目标行距 ${s.lineSpacingM.toFixed(2)} m；目标采集站距 ${s.shotSpacingM.toFixed(2)} m。边缘补线可能缩小局部间距。`:'生成航线后显示扫宽与目标行距。';
   $('preview').disabled=!plan;$('export-toggle').disabled=!plan;
   if(s){
     $('plan-title').textContent=`已生成 ${s.legCount} 段拍摄航线`;
-    $('plan-subtitle').textContent=`${s.stationCount} 采集站 · 行距 ${s.lineSpacingM.toFixed(1)} m · 绝对高程 ${s.absoluteHeightMinM.toFixed(1)}–${s.absoluteHeightMaxM.toFixed(1)} m`;
+    $('plan-subtitle').textContent=`${s.stationCount} 采集站 · 目标行距 ${s.lineSpacingM.toFixed(1)} m · 绝对高程 ${s.absoluteHeightMinM.toFixed(1)}–${s.absoluteHeightMaxM.toFixed(1)} m`;
     $('quality-content').replaceChildren();
-    const basics=document.createElement('p');basics.textContent=`固定离地 ${s.aglM.toFixed(1)} m；沿线地形 ${s.terrainMinM.toFixed(1)}–${s.terrainMaxM.toFixed(1)} m；${plan.terrain.sampleCount} 个高程采样点。${plan.terrain.verticalDatumLabel || plan.terrain.verticalDatum}。统计仅含区内三维航迹，不含机场往返和原生摆拍周期。`;$('quality-content').append(basics);
+    const basics=document.createElement('p');basics.textContent=`固定离地 ${s.aglM.toFixed(1)} m；沿线地形 ${s.terrainMinM.toFixed(1)}–${s.terrainMaxM.toFixed(1)} m；${plan.terrain.sampleCount} 个高程采样点。${plan.terrain.verticalDatumLabel || plan.terrain.verticalDatum}。统计仅含区内三维航迹，不含机场往返；用时按设定速度估算，超出速度约束时不自动降速。`;$('quality-content').append(basics);
+    if(plan.captureMode==='smartOrtho'){
+      const quality=document.createElement('p');quality.textContent=`横向有效边缘的近似 GSD 放大 ${s.edgeGsdScale.toFixed(2)} 倍，约 ${s.edgeGsdCm.toFixed(2)} cm/px。该值为横向截面估算，真实坡面和遮挡需另行验证。`;$('quality-content').append(quality);
+    }
+    const timing=document.createElement('p');timing.textContent=`最小水平采集站距 ${s.minimumActualStationSpacingM.toFixed(2)} m；单张节拍速度上限 ${s.maxSpeedByPhotoMps.toFixed(2)} m/s${plan.captureMode==='smartOrtho'?(s.maxSpeedByCycleMps===null?'；三向周期未测，周期对应速度上限未知':`；实测三向周期速度上限 ${s.maxSpeedByCycleMps.toFixed(2)} m/s`):''}。按水平站距保守计算，已知约束下速度上限 ${s.maxSpeedMps.toFixed(2)} m/s。`;$('quality-content').append(timing);
     for(const message of plan.warnings){const p=document.createElement('p');p.textContent=message;$('quality-content').append(p);}
   }else{$('quality-content').replaceChildren();$('plan-title').textContent=state.ring.length?'等待有效规划参数':'绘制区域，自动生成航线';$('plan-subtitle').textContent='可绘制任意不自交的多边形';}
   updateLabels();refreshMap();
@@ -190,13 +197,11 @@ $('undo').onclick=()=>{if(drawing){map.undo();return;}const previous=history.pop
 $('clear').onclick=()=>{remember();map.cancel();state.ring=[];state.holes=[];state.demo=false;syncInputs();schedule(true);};
 $('load-sample').onclick=()=>{remember();map.cancel();state={name:'南山科技园航测',ring:structuredClone(sample),holes:[],dock:[113.94625,22.54185],options:{...defaults},demo:true};syncInputs();schedule(true);map.fit(state.ring);};
 $('mission-name').oninput=event=>{state.name=event.target.value;save();};
-for(const key of ['camera','captureMode','smartPitch','smartYaw','altitude','speed','frontOverlap','sideOverlap','heading','autoHeading','crossGrid','terrainSampleSpacing']) {
+for(const key of ['camera','captureMode','sideTiltDeg','qualityCutoffDeg','captureCycleSeconds','altitude','speed','frontOverlap','sideOverlap','heading','autoHeading','crossGrid','terrainSampleSpacing']) {
   const el=$(key);el.addEventListener(el.type==='range'?'input':'change',()=>{
-    if(el.type==='number'&&(!el.value||!el.checkValidity())){el.value=state.options[key];notify('请输入范围内的有效数值，已恢复上次设置');return;}
-    state.options[key]=el.type==='checkbox'?el.checked:['camera','captureMode'].includes(key)?el.value:Number(el.value);
-    if(key==='camera'&&state.options.camera!=='4D'&&state.options.captureMode==='smartOrtho'){
-      state.options.captureMode='nadir';$('captureMode').value='nadir';notify('4TD 使用垂直拍摄，已切换采集方式');
-    }
+    const emptyCycle=key==='captureCycleSeconds'&&el.value.trim()==='';
+    if(el.type==='number'&&!emptyCycle&&(!el.value||!el.checkValidity())){el.value=state.options[key]??'';notify('请输入范围内的有效数值，已恢复上次设置');return;}
+    state.options[key]=el.type==='checkbox'?el.checked:['camera','captureMode'].includes(key)?el.value:emptyCycle?null:Number(el.value);
     updateLabels();schedule();
   });
 }

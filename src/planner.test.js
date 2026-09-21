@@ -173,3 +173,28 @@ test('malformed imported geometry and option values fail without unsafe coercion
   const overlapping = ll([[100,60],[180,60],[180,160],[100,160]]);
   assert.equal(validatePolygon(ll(rectangle),[first,overlapping]).valid,false);
 });
+
+test('wide combined swaths still fill flat coverage gaps using actual nadir footprints',()=>{
+  const boundary=[[0,0],[1000,0],[1000,600],[0,600]];
+  const plan=planMission(ll(boundary),{...baseOptions,captureMode:'smartOrtho',sideOverlap:50,sideTiltDeg:25,qualityCutoffDeg:65});
+  assert.ok(plan.stats.lineSpacingM>plan.stats.footprintWidthM);
+  assert.ok(plan.stats.coverageAddedRows>0,'Sparse equivalent strips must not be treated as solid image rectangles');
+  const exposures=plan.photos.map(frame.forward);
+  for(let x=0;x<=1000;x+=10)for(let y=0;y<=600;y+=10){
+    assert.ok(exposures.some(p=>Math.abs(p[0]-x)<=plan.stats.footprintLengthM/2+.02 && Math.abs(p[1]-y)<=plan.stats.footprintWidthM/2+.02),`Uncovered ground ${x},${y}`);
+  }
+  assertRouteInside(plan,boundary);
+});
+
+test('combined-swath routes preserve concave and hole constraints across both grid directions',()=>{
+  const horn=[[0,0],[200,0],[200,73],[600,73],[600,75],[200,75],[200,200],[0,200]];
+  const smart={...baseOptions,captureMode:'smartOrtho'};
+  const plan=planMission(ll(horn),smart);
+  assertRouteInside(plan,horn);
+  const exposures=plan.photos.map(frame.forward);
+  for(let x=0;x<=600;x+=5)assert.ok(exposures.some(p=>Math.abs(p[0]-x)<=plan.stats.footprintLengthM/2+.02 && Math.abs(p[1]-74)<=plan.stats.footprintWidthM/2+.02));
+  const hole=[[110,55],[190,55],[190,150],[110,150]];
+  const cross=planMission(ll(rectangle),{...smart,crossGrid:true},[ll(hole)]);
+  assert.ok(cross.legs.some(leg=>leg.pass===2));
+  assertRouteInside(cross,rectangle,[hole]);
+});

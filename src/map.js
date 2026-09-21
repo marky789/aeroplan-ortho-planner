@@ -167,7 +167,8 @@ export function createMap(container, callbacks) {
         const station=plan.captureRequests[0], f=createLocalProjection([plan.projectionOrigin]), xy=f.forward(station.position.slice(0,2));
         const a=station.flightHeadingDeg*Math.PI/180,c=Math.cos(a),s=Math.sin(a);
         for(const [index,view] of plan.captureModel.views.entries()){
-          const coords=view.corners.map(([x,y])=>[...f.inverse([xy[0]+c*x+s*y,xy[1]-s*x+c*y]),station.position[2]-model.altitude]);
+          if(view.usableCorners.length<3 || view.usableAreaM2<=0)continue;
+          const coords=view.usableCorners.map(([x,y])=>[...f.inverse([xy[0]+c*x+s*y,xy[1]-s*x+c*y]),station.position[2]-model.altitude]);
           const tint=[Color.CORNFLOWERBLUE,GREEN,AMBER][index];
           routes.entities.add({polygon:{hierarchy:new PolygonHierarchy(coords.map(LL)),perPositionHeight:true,material:tint.withAlpha(.18)}});
           polyline(routes,[...coords,coords[0]],tint,1.5);
