@@ -10,6 +10,7 @@ import { CGCS2000_ELLIPSOID, createTiandituLayers } from './tianditu.js';
 import { createOnlineTerrain } from './terrain-source.js';
 import { createLocalProjection } from './planner.js';
 import { measureBoundary, formatDistance } from './boundary-measurement.js';
+import { INITIAL_MAP_VIEW } from './mission-defaults.js';
 
 const GREEN = Color.fromCssColorString('#35e5b0');
 const WHITE = Color.fromCssColorString('#ffffff');
@@ -279,7 +280,7 @@ export function createMap(container, callbacks) {
     frame=requestAnimationFrame(tick);
   }
   setBasemap('imagery');
-  viewer.camera.setView({ destination: LL([113.948,22.5407,2300]),
+  viewer.camera.setView({ destination: LL([INITIAL_MAP_VIEW.longitude,INITIAL_MAP_VIEW.latitude,INITIAL_MAP_VIEW.height]),
     orientation: { heading:0, pitch:-(Math.PI/2-.0001), roll:0 } });
   let firstLoad = false;
   viewer.scene.globe.tileLoadProgressEvent.addEventListener(count => {

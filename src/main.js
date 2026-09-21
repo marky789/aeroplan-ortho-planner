@@ -2,10 +2,11 @@ import 'cesium/Build/Cesium/Widgets/widgets.css';
 import './style.css';
 import { createIcons, ScanLine, Check, CircleHelp, Download, ChevronDown, FileJson, Table2, ArrowUpRight, Pentagon, Upload, Undo2, Trash2, Grid2x2, RefreshCw, MapPin, Layers, SquareDashed, MapPinPlus, Camera, X, Scan, Compass, Plus, Minus, Play, Pause, Info, ArrowRight } from 'lucide';
 import { createMap } from './map.js';
-import { DEFAULT_OPTIONS, applyCameraPreset, validatePolygon, validateOptions } from './planner.js';
+import { applyCameraPreset, validatePolygon, validateOptions } from './planner.js';
 import { attachTerrainToPlan } from './terrain-route.js';
 import { exportMission, exportStationsCsv } from './mission-export.js';
 import { formatDistance } from './boundary-measurement.js';
+import { INITIAL_MAP_VIEW, createSampleMission } from './mission-defaults.js';
 const icons={ScanLine,Check,CircleHelp,Download,ChevronDown,FileJson,Table2,ArrowUpRight,Pentagon,Upload,Undo2,Trash2,Grid2x2,RefreshCw,MapPin,Layers,SquareDashed,MapPinPlus,Camera,X,Scan,Compass,Plus,Minus,Play,Pause,Info,ArrowRight};
 
 // Visual thesis: a quiet ivory inspector beside an edge-to-edge satellite workspace,
@@ -14,9 +15,7 @@ const icons={ScanLine,Check,CircleHelp,Download,ChevronDown,FileJson,Table2,Arro
 // Interaction: live drawing, restrained camera transitions, and an explicit route preview.
 const icon = name => `<i data-lucide="${name}" aria-hidden="true"></i>`;
 const $ = id => document.getElementById(id);
-const sample = [[113.9458,22.5424],[113.9512,22.5427],[113.9514,22.5404],[113.9492,22.5403],[113.9491,22.5387],[113.9455,22.5389]];
-const defaults = { ...DEFAULT_OPTIONS };
-let state = { name:'南山科技园航测', ring:sample, holes:[], dock:[113.94625,22.54185], options:{...defaults}, demo:true };
+let state = createSampleMission();
 const validDock=p=>p===null || (Array.isArray(p) && p.length>=2 && Number.isFinite(p[0]) && Number.isFinite(p[1]) && Math.abs(p[0])<=180 && Math.abs(p[1])<85);
 try {
   const saved=JSON.parse(localStorage.getItem('aeroplan-mission-v1')||'null');
@@ -77,7 +76,7 @@ $('app').innerHTML=`
     </aside>
     <section class="map-workspace" aria-label="Cesium 航线地图">
       <div id="cesium-container"></div>
-      <div class="map-top"><div class="location-chip">${icon('map-pin')}<span id="location-title">南山科技园 · 示例区域</span><span class="location-divider"></span><span>CGCS2000</span></div>
+      <div class="map-top"><div class="location-chip">${icon('map-pin')}<span id="location-title">宁波城区 · 示例区域</span><span class="location-divider"></span><span>CGCS2000</span></div>
         <div class="basemap-control"><label class="sr-only" for="basemap">底图类型</label>${icon('layers')}<select id="basemap"><option value="imagery">卫星影像</option><option value="vector">矢量地图</option></select></div>
       </div>
       <div class="map-tools"><button id="tool-area" title="绘制作业区" aria-label="绘制作业区">${icon('pentagon')}<span>作业区</span></button><button id="tool-hole" title="绘制排除区域" aria-label="绘制排除区域">${icon('square-dashed')}<span>排除区</span></button><button id="tool-dock" title="标记机场位置" aria-label="标记机场位置">${icon('map-pin-plus')}<span>机场</span></button><span class="tool-divider"></span><button id="toggle-photos" aria-label="拍照点" title="显示拍照点" aria-pressed="false">${icon('camera')}<span>拍照点</span></button></div>
@@ -88,7 +87,7 @@ $('app').innerHTML=`
         <div class="metrics"><div><span>作业面积</span><strong id="metric-area">—<small>ha</small></strong></div><div><span>区内航程</span><strong id="metric-distance">—<small>km</small></strong></div><div><span>区内用时</span><strong id="metric-time">—<small>min</small></strong></div><div><span>预计照片</span><strong id="metric-photos">—<small>张</small></strong></div><div><span>地面 GSD</span><strong id="metric-gsd">—<small>cm/px</small></strong></div></div>
         <details class="quality-details"><summary><span>${icon('info')}地形跟随预规划 · 高程与采集说明</span>${icon('chevron-down')}</summary><div id="quality-content"></div></details>
       </div>
-      <div class="map-footer"><span><i class="status-dot" id="tile-dot"></i><span id="tile-status">正在加载天地图</span></span><span id="coordinates">113.948000° E &nbsp; 22.540700° N</span><span>CGCS2000 / EPSG:4490</span></div>
+      <div class="map-footer"><span><i class="status-dot" id="tile-dot"></i><span id="tile-status">正在加载天地图</span></span><span id="coordinates">${INITIAL_MAP_VIEW.longitude.toFixed(6)}° E &nbsp; ${INITIAL_MAP_VIEW.latitude.toFixed(6)}° N</span><span>CGCS2000 / EPSG:4490</span></div>
       <div id="map-error" class="map-error" role="status" hidden></div>
     </section>
   </main>
@@ -104,7 +103,7 @@ function syncInputs(){
   $('mission-name').value=state.name;
   Object.entries(state.options).forEach(([key,value])=>{const el=$(key);if(el){if(el.type==='checkbox')el.checked=value;else el.value=value??'';}});
   $('demo-badge').hidden=!state.demo;
-  $('location-title').textContent=state.demo?'南山科技园 · 示例区域':'当前作业区域';
+  $('location-title').textContent=state.demo?`${state.name.replace(/航测$/,'')} · 示例区域`:'当前作业区域';
   updateLabels();
 }
 function updateLabels(){
@@ -201,7 +200,7 @@ $('draw').onclick=() => begin('area');$('tool-area').onclick=()=>begin('area');$
 $('finish-draw').onclick=()=>map.finish();$('cancel-draw').onclick=()=>map.cancel();
 $('undo').onclick=()=>{if(drawing){map.undo();return;}const previous=history.pop();if(previous){state=previous;syncInputs();schedule(true);}else notify('没有可撤销的操作');};
 $('clear').onclick=()=>{remember();map.cancel();state.ring=[];state.holes=[];state.demo=false;syncInputs();schedule(true);};
-$('load-sample').onclick=()=>{remember();map.cancel();state={name:'南山科技园航测',ring:structuredClone(sample),holes:[],dock:[113.94625,22.54185],options:{...defaults},demo:true};syncInputs();schedule(true);map.fit(state.ring);};
+$('load-sample').onclick=()=>{remember();map.cancel();state=createSampleMission();syncInputs();schedule(true);map.fit(state.ring);};
 $('mission-name').oninput=event=>{state.name=event.target.value;save();};
 for(const key of ['camera','captureMode','sideTiltDeg','qualityCutoffDeg','captureCycleSeconds','altitude','speed','frontOverlap','sideOverlap','heading','autoHeading','crossGrid','terrainSampleSpacing']) {
   const el=$(key);el.addEventListener(el.type==='range'?'input':'change',()=>{
@@ -259,5 +258,7 @@ document.addEventListener('keydown',event=>{
   if(event.key==='Backspace'&&drawing){event.preventDefault();map.undo();}
   if(event.key.toLowerCase()==='d')begin('area');
 });
-syncInputs();schedule(true);map.fit(state.ring,0);
+// Keep the initial Ningbo view even when restoring a draft from another city.
+// The explicit fit control and imports still frame the selected mission.
+syncInputs();schedule(true);
 window.addEventListener('beforeunload',()=>{worker.terminate();map.destroy();});
